@@ -43,7 +43,18 @@ public final class MyGameStateFactory implements Factory<GameState> {
 		}
 
 		@Override
-		public GameState advance(Move move) {return null;}
+		public GameState advance(Move move) {
+//			return move.accept(new Move.Visitor<GameState>() {
+//				@Override
+//				public GameState visit(Move.SingleMove move) {
+////					Mr X
+//					move.commencedBy().isMrX();
+////					Detectives
+//					return null;
+//				}
+//			}
+			return null;
+		}
 
 		@Override
 		public GameSetup getSetup() {  return setup; }
@@ -94,7 +105,69 @@ public final class MyGameStateFactory implements Factory<GameState> {
 		}
 
 		@Override
-		public ImmutableSet<Move> getAvailableMoves()   {  return null; }
+		public ImmutableSet<Move> getAvailableMoves()   {
+			Set<Move> moves = new HashSet<>();
+			moves.addAll(makeSingleMoves(setup, detectives, mrX, mrX.location()));
+			moves.addAll(makeDoubleMoves(setup, detectives, mrX, mrX.location(), log));
+
+			return ImmutableSet.copyOf(moves);
+		}
+
+//		Helper function for getAvailableMoves()
+		private static Set<SingleMove> makeSingleMoves(GameSetup setup, List<Player> detectives, Player player, int source){
+			Set<SingleMove> singleMoves = new HashSet<>();
+
+			for(int destination : setup.graph.adjacentNodes(source)) {
+//				Check if destination is occupied by a detective
+				boolean occupied = false;
+				for (Player d : detectives) {
+					if (d.location() == destination) {
+						occupied = true;
+						break;
+					}
+				}
+				if (occupied) continue;
+
+				for(Transport t : setup.graph.edgeValueOrDefault(source, destination, ImmutableSet.of()) ) {
+					// Check if the player has the required tickets
+					Ticket ticket = t.requiredTicket();
+					if (player.has(ticket)) {
+						singleMoves.add(new SingleMove(player.piece(), source, ticket, destination));
+					}
+
+//					Check if the player is MrX and has secret ticket
+					if (player.isMrX() && player.has(Ticket.SECRET)) {
+						singleMoves.add(new SingleMove(player.piece(), source, Ticket.SECRET, destination));
+					}
+				}
+
+			}
+			return singleMoves;
+		}
+
+//		Helper function for getAvailableMoves()
+		private static Set<DoubleMove> makeDoubleMoves(GameSetup setup, List<Player> detectives, Player player, int source, ImmutableList<LogEntry> log){
+			Set<DoubleMove> doubleMoves = new HashSet<>();
+			boolean atLeastTwoRoundsLeft = (log.size() + 1) < setup.moves.size();
+
+//			Check if it is MrX, has secret ticket and has at least 2 rounds left
+			if (!player.isMrX() || !player.has(Ticket.DOUBLE) || !atLeastTwoRoundsLeft) { return doubleMoves; }
+
+
+//			DoubleMove is form by 2 single moves
+//			So it first use 1 ticket to do the first move
+//			After that do the second move
+//			Finally add to doubleMoves set
+			for (SingleMove firstMove : makeSingleMoves(setup, detectives, player, source)) {
+				Player afterFirstMove = player.use(firstMove.ticket).at(firstMove.destination);
+
+				for (SingleMove secondMove : makeSingleMoves(setup, detectives, afterFirstMove, firstMove.destination)) {
+					doubleMoves.add(new DoubleMove(player.piece(), source, firstMove.ticket, firstMove.destination, secondMove.ticket, secondMove.destination));
+				}
+			}
+
+			return doubleMoves;
+		}
 	}
 
 	@Nonnull
