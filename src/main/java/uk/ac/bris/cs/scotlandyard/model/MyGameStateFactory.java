@@ -2,6 +2,7 @@ package uk.ac.bris.cs.scotlandyard.model;
 
 import com.google.common.collect.ImmutableList;
 
+import com.google.common.collect.ImmutableMap;
 import jakarta.annotation.Nonnull;
 
 import uk.ac.bris.cs.scotlandyard.model.Board.GameState;
@@ -20,10 +21,12 @@ public final class MyGameStateFactory implements Factory<GameState> {
 
 	private final class MyGameState implements GameState {
 		private final GameSetup setup;
+//		Pieces that are still allowed to move in the current turn
 		private final ImmutableSet<Piece> remaining;
+//		MrX travel log
 		private final ImmutableList<LogEntry> log;
 		private final Player mrX;
-		private final List<Player> detectives;
+		private final ImmutableList<Player> detectives;
 		private ImmutableSet<Move> moves;
 		private ImmutableSet<Piece> winner;
 
@@ -44,16 +47,113 @@ public final class MyGameStateFactory implements Factory<GameState> {
 
 		@Override
 		public GameState advance(Move move) {
-//			return move.accept(new Move.Visitor<GameState>() {
-//				@Override
-//				public GameState visit(Move.SingleMove move) {
-////					Mr X
-//					move.commencedBy().isMrX();
-////					Detectives
-//					return null;
-//				}
-//			}
-			return null;
+			if(!getAvailableMoves().contains(move)) throw new IllegalArgumentException("Illegal move: "+move);
+
+			return move.accept(new Move.Visitor<GameState>() {
+				@Override
+				public GameState visit(Move.SingleMove move) {
+					Piece piece = move.commencedBy();
+					Player newMrX;
+					List<Player> newDetectives = new ArrayList<>();
+					ImmutableSet<Piece> newRemaining;
+					List<LogEntry> newLog = new ArrayList<>(log);
+
+//					If current turn is MrX
+					if (piece.isMrX()) {
+//						Create a new MrX with updated tickets count and new location
+						newMrX = new Player(mrX.piece(), mrX.use(move.ticket).tickets(), move.destination);
+//						No changes to detectives list
+						newDetectives = detectives;
+//						Detectives turn, add detective.piece() to newRemaining
+						newRemaining = detectives.stream()
+												.map(detective -> detective.piece())
+												.collect(ImmutableSet.toImmutableSet());
+
+//						Check if current round need to reveal MrX
+//						Add MrX's LogEntry to newLog
+						int round = log.size();
+						boolean reveal = setup.moves.get(round);
+						if (reveal) {
+							newLog.add(LogEntry.reveal(move.ticket, move.destination));
+						}
+						else {
+							newLog.add(LogEntry.hidden(move.ticket));
+						}
+					}
+
+//					If current turn is detectives
+					else {
+//						No changes to MrX
+						newMrX = mrX;
+
+						for (Player detective : detectives) {
+//							If it is the detective's turn, out of all the other detectives
+							if (detective.piece().equals(piece)) {
+//								Create a new detective with updated tickets count and new location,
+//								And add it to newDetectives list
+								newDetectives.add(new Player(detective.piece(), detective.use(move.ticket).tickets(), move.destination));
+							}
+//							Add the rest of the detectives to the newDetectives list
+							else {
+								newDetectives.add(detective);
+							}
+						}
+
+//						Remove the detective from remaining
+						newRemaining = remaining.stream()
+												.filter(p -> p != piece)
+												.collect(ImmutableSet.toImmutableSet());
+
+//						Turn rotation, MrX's turn
+//						remaining is empty when all detectives have moved
+						if (newRemaining.isEmpty()) {
+							newRemaining = ImmutableSet.of(mrX.piece());
+						}
+					}
+
+					return new MyGameState(setup, newRemaining, ImmutableList.copyOf(newLog), newMrX, ImmutableList.copyOf(newDetectives));
+				}
+
+				@Override
+				public GameState visit(Move.DoubleMove move) {
+					Player newMrX;
+					ImmutableSet<Piece> newRemaining;
+					List<LogEntry> newLog = new ArrayList<>(log);
+
+//					Detectives turn, add detective.piece() to newRemaining
+					newRemaining = detectives.stream()
+							.map(detective -> detective.piece())
+							.collect(ImmutableSet.toImmutableSet());
+
+//					Check if first round need to reveal MrX
+//					Add MrX's first LogEntry to newLog
+					int firstRound = log.size();
+					boolean revealFirstRound = setup.moves.get(firstRound);
+					if (revealFirstRound) {
+						newLog.add(LogEntry.reveal(move.ticket1, move.destination1));
+					}
+					else {
+						newLog.add(LogEntry.hidden(move.ticket1));
+					}
+
+//					Check if first round need to reveal MrX
+//					Add MrX's first LogEntry to newLog
+					int secondRound = firstRound + 1;
+					boolean revealSecondRound = setup.moves.get(secondRound);
+					if (revealSecondRound) {
+						newLog.add(LogEntry.reveal(move.ticket2, move.destination2));
+					}
+					else {
+						newLog.add(LogEntry.hidden(move.ticket2));
+					}
+
+//					MrX's tickets after double move
+					ImmutableMap<Ticket, Integer> newMrXTickets = mrX.use(ScotlandYard.Ticket.DOUBLE).use(move.ticket1).use(move.ticket2).tickets();
+					newMrX = new Player(mrX.piece(), newMrXTickets, move.destination2);
+
+					return new MyGameState(setup, newRemaining, ImmutableList.copyOf(newLog), newMrX, detectives);
+				}
+			});
 		}
 
 		@Override
@@ -86,7 +186,6 @@ public final class MyGameStateFactory implements Factory<GameState> {
 				return Optional.of(ticket -> mrX.tickets().get(ticket));
 			}
 
-
 //			Detectives
 			for (Player player : detectives) {
 				if (player.piece() == piece) {
@@ -107,8 +206,21 @@ public final class MyGameStateFactory implements Factory<GameState> {
 		@Override
 		public ImmutableSet<Move> getAvailableMoves()   {
 			Set<Move> moves = new HashSet<>();
-			moves.addAll(makeSingleMoves(setup, detectives, mrX, mrX.location()));
-			moves.addAll(makeDoubleMoves(setup, detectives, mrX, mrX.location(), log));
+
+//			MrX turn
+			if (remaining.contains(mrX.piece())) {
+				moves.addAll(makeSingleMoves(setup, detectives, mrX, mrX.location()));
+				moves.addAll(makeDoubleMoves(setup, detectives, mrX, mrX.location(), log));
+			}
+
+//			Remaining detectives
+			else {
+				for (Player detective : detectives) {
+					if (remaining.contains(detective.piece())) {
+					moves.addAll(makeSingleMoves(setup, detectives, detective, detective.location()));
+					}
+				}
+			}
 
 			return ImmutableSet.copyOf(moves);
 		}
