@@ -83,8 +83,8 @@ public final class MyGameStateFactory implements Factory<GameState> {
 
 //					If current turn is detectives
 					else {
-//						No changes to MrX
-						newMrX = mrX;
+//						Give MrX the detective used ticket
+						newMrX = mrX.give(move.ticket);
 
 						for (Player detective : detectives) {
 //							If it is the detective's turn, out of all the other detectives
